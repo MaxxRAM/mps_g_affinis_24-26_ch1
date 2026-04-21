@@ -1,0 +1,1472 @@
+---
+title: "Chapter_1_Statistics"
+author: "Maxximus Ramsaroop"
+date: "2025-08-22"
+output: html_document
+---
+
+This rmd is a complete documentation of all of the necessary statistics performed for chapter 1 of my phd thesis (2023-2026) including data on boldness, exploration, social motivation, inhibitory control, and spatial learning. 
+```{r Preliminary Set Up, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load in all necessary packages
+library(tidyverse)
+library(rstatix)
+library(ggplot2)
+library(ggcorrplot)
+library(MuMIn)
+library(rlang)
+library(DHARMa)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(glmmTMB)
+
+# set correct colors for each sex
+
+sex_colors <- c(
+  "M" = "#7899d4",
+  "F" = "#e3c16f"
+)
+
+# Set default discrete scales for treatment and sex
+scale_color_discrete <- function(...) {
+  ggplot2::scale_color_manual(values = c(sex_colors))
+}
+
+scale_fill_discrete <- function(...) {
+  ggplot2::scale_fill_manual(values = c(sex_colors))
+}
+```
+
+```{r scoto_detour_morpho dataframe set up}
+# load in data on boldness, exploration, social motivation, and inhibitory control
+f<- "C:/Users/maxma/Downloads/scoto_detour_morpho_df.csv"
+scoto_detour_morpho_df<- read.csv(f)
+
+# create df with individuals that solved the detour reaching task only and set all non-learners to 600 seconds
+scoto_detour_morpho_learners_df<- scoto_detour_morpho_df|> mutate(LearnNonLearnBin = if_else(scoto_detour_morpho_df$Solve_Time==600, 0, 1))
+scoto_detour_morpho_learners_df<- scoto_detour_morpho_learners_df |> filter(LearnNonLearnBin == 1)
+
+# set treatment to a factor instead of a character in the order C, L, H & rename to control, low, and high
+scoto_detour_morpho_df$Treatment <- factor(
+  scoto_detour_morpho_df$Treatment.x,
+  levels = c("C", "L", "H"),
+  labels = c("Control", "Low", "High")
+)
+
+# make female and male only dfs
+fdf<- scoto_detour_morpho_df |> filter(Sex.x == "F")
+mdf<- scoto_detour_morpho_df |> filter(Sex.x == "M")
+```
+
+```{r route learning dataframe set up}
+# load in data on spatial learning
+f<- "C:/Users/maxma/Downloads/Route Learning Master Sheet_R - copy.csv"
+rl_df<- read_csv(f)
+
+# fix the time to reach transparent barriers to numeric
+rl_df$latency_transparentbarrier1 <- as.numeric(rl_df$latency_transparentbarrier1)
+rl_df$latency_transparent2 <- as.numeric(rl_df$latency_transparent2)
+
+
+# set any numeric columns in rl_df < 0 to NA; makes all (-) data = 0 to say the event did not occur
+for (col in names(rl_df)) {
+  if (is.numeric(rl_df[[col]])) {
+    rl_df[[col]][rl_df[[col]] < 0] <- NA
+    rl_df[[col]][is.nan(rl_df[[col]])] <- NA
+  }
+}
+
+# coerce all barrier choices to numeric, calculate total incorrect & correct choices & error rate over trials
+rl_df <- rl_df |> 
+  mutate(
+    number_wrong_barrier_1 = as.numeric(as.character(number_wrong_barrier_1)),
+    number_wrong_barrier_2 = as.numeric(as.character(number_wrong_barrier_2)),
+    number_correct_barrier_1 = as.numeric(as.character(number_correct_barrier_1)),
+    number_correct_barrier_2 = as.numeric(as.character(number_correct_barrier_2)),
+    total_errors = number_wrong_barrier_1 + number_wrong_barrier_2,
+    total_correct = number_correct_barrier_1 + number_correct_barrier_2,
+    trial_error_rate = total_errors / (total_errors + total_correct)
+  )
+
+
+# set all unsolved trials to 500 in solve_2 and create dfs for stopping at trial 4 and of only trial 4
+rl_df4<- rl_df|> filter(trial_num <= 4)
+rl_df4_only<- rl_df|> filter(trial_num == 4)
+rl_df5<- rl_df|> filter(trial_num == 5)
+rl_df3<- rl_df|> filter(trial_num == 3)
+rl_df2<- rl_df|> filter(trial_num == 2)
+rl_df1<- rl_df|> filter(trial_num == 1)
+```
+
+```{r custom functions for heatmap}
+# Function for making heatmaps of all pairwise Spearman correlations within treatments & sexes; used to measure behavioral syndromes / profiles
+heatmap_maker_spearman <- function(df) {
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(reshape2)
+  library(rlang)
+
+  numeric_df <- df[sapply(df, is.numeric)]
+  var_names <- colnames(numeric_df)
+
+  corr_mat <- matrix(NA, ncol = length(var_names), nrow = length(var_names))
+  pval_mat <- matrix(NA, ncol = length(var_names), nrow = length(var_names))
+  colnames(corr_mat) <- rownames(corr_mat) <- var_names
+  colnames(pval_mat) <- rownames(pval_mat) <- var_names
+
+  for (i in seq_along(var_names)) {
+    for (j in seq_along(var_names)) {
+      x <- numeric_df[[var_names[i]]]
+      y <- numeric_df[[var_names[j]]]
+      test <- suppressWarnings(cor.test(x, y, method = "spearman", exact = FALSE))
+      corr_mat[i, j] <- test$estimate
+      pval_mat[i, j] <- test$p.value
+    }
+  }
+
+  corr_df <- melt(corr_mat, varnames = c("Var1", "Var2"), value.name = "rho")
+  pval_df <- melt(pval_mat, varnames = c("Var1", "Var2"), value.name = "p")
+
+ heatmap_df <- left_join(corr_df, pval_df, by = c("Var1", "Var2")) %>%
+  filter(as.numeric(factor(Var1, levels = var_names)) > as.numeric(factor(Var2, levels = var_names))) %>%
+  mutate(
+    label = paste0(
+      "atop(rho == ", sprintf("%.2f", rho),
+      ", p == ", sprintf("%.2f", p), ")"
+    ),
+    p_cat = cut(p, breaks = c(0, 0.001, 0.01, 0.05, 1), labels = c("***", "**", "*", "")))
+ 
+  ggplot(heatmap_df, aes(x = Var1, y = Var2, fill = rho)) +
+    geom_tile(color = "white") +
+    geom_text(
+  aes(label = label, fontface = ifelse(p < 0.05, "bold", "plain")),
+  size = 3.2,
+  parse = TRUE
+) +
+    scale_fill_gradient2(low = "#6D9EC1", mid = "white", high = "#E46726", midpoint = 0,
+                         limit = c(-1, 1), name = "Spearman\nCorrelation") +
+    theme_minimal(base_size = 12) +
+    theme(
+  axis.text.x = element_text(size = 8, face = "bold", angle = 45, vjust = 1, hjust = 1),
+  axis.text.y = element_text(size = 8, face = "bold"),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid = element_blank()
+) +
+    coord_fixed()
+}
+
+
+# function to compare the correlations between two groups individually (ex. solve time distance moved correlation in control females vs relationship in control males)
+compare_correlations <- function(df, 
+                                 sex1, treatment1, 
+                                 sex2, treatment2,
+                                 var1 = Solve_Time, 
+                                 var2 = Distance_moved_Total_cm) {
+  
+  # Capture inputs
+  var1 <- enquo(var1)
+  var2 <- enquo(var2)
+  sex1 <- as_label(enquo(sex1))
+  treatment1 <- as_label(enquo(treatment1))
+  sex2 <- as_label(enquo(sex2))
+  treatment2 <- as_label(enquo(treatment2))
+  
+  # Group 1
+  group1 <- df %>%
+    filter(Sex.x == sex1, Treatment.x == treatment1) %>%
+    filter(!is.na(!!var1) & !is.na(!!var2))
+  
+  r1 <- cor(pull(group1, !!var1), pull(group1, !!var2), method = "spearman")
+  n1 <- nrow(group1)
+  
+  # Group 2
+  group2 <- df %>%
+    filter(Sex.x == sex2, Treatment.x == treatment2) %>%
+    filter(!is.na(!!var1) & !is.na(!!var2))
+  
+  r2 <- cor(pull(group2, !!var1), pull(group2, !!var2), method = "spearman")
+  n2 <- nrow(group2)
+  
+  # Edge case check
+  if (n1 < 4 | n2 < 4 | is.na(r1) | is.na(r2)) {
+    return(tibble(
+      sex1 = sex1, treatment1 = treatment1, r1 = r1, n1 = n1,
+      sex2 = sex2, treatment2 = treatment2, r2 = r2, n2 = n2,
+      z_score = NA_real_,
+      p_value = NA_real_
+    ))
+  }
+  
+  # Fisher z transform
+  z1 <- 0.5 * log((1 + r1) / (1 - r1))
+  z2 <- 0.5 * log((1 + r2) / (1 - r2))
+  
+  se_diff <- sqrt(1 / (n1 - 3) + 1 / (n2 - 3))
+  z_score <- (z1 - z2) / se_diff
+  p_value <- 2 * (1 - pnorm(abs(z_score)))
+  
+  tibble(
+    sex1 = sex1, treatment1 = treatment1, r1 = r1, n1 = n1,
+    sex2 = sex2, treatment2 = treatment2, r2 = r2, n2 = n2,
+    z_score = z_score,
+    p_value = p_value
+  )
+}
+
+```
+
+```{r fdr heatmap}
+heatmap_maker_spearman <- function(df) {
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(reshape2)
+  library(rlang)
+
+  numeric_df <- df[sapply(df, is.numeric)]
+  var_names <- colnames(numeric_df)
+
+  corr_mat <- matrix(NA, ncol = length(var_names), nrow = length(var_names))
+  pval_mat <- matrix(NA, ncol = length(var_names), nrow = length(var_names))
+  colnames(corr_mat) <- rownames(corr_mat) <- var_names
+  colnames(pval_mat) <- rownames(pval_mat) <- var_names
+
+  for (i in seq_along(var_names)) {
+    for (j in seq_along(var_names)) {
+      x <- numeric_df[[var_names[i]]]
+      y <- numeric_df[[var_names[j]]]
+      test <- suppressWarnings(cor.test(x, y, method = "spearman", exact = FALSE))
+      corr_mat[i, j] <- test$estimate
+      pval_mat[i, j] <- test$p.value
+    }
+  }
+
+  corr_df <- melt(corr_mat, varnames = c("Var1", "Var2"), value.name = "rho")
+  pval_df <- melt(pval_mat, varnames = c("Var1", "Var2"), value.name = "p")
+
+  heatmap_df <- left_join(corr_df, pval_df, by = c("Var1", "Var2")) %>%
+    # keep only unique pairs (lower triangle)
+    filter(as.numeric(factor(Var1, levels = var_names)) >
+             as.numeric(factor(Var2, levels = var_names))) %>%
+    # FDR adjust across the unique tests
+    mutate(p_adj = p.adjust(p, method = "BH")) %>%
+    mutate(
+      label = paste0(
+        "atop(rho == ", sprintf("%.2f", rho),
+        ", q == ", sprintf("%.2f", p_adj), ")"   # q = FDR-adjusted p-value
+      ),
+      p_cat = cut(p_adj,
+                  breaks = c(0, 0.001, 0.01, 0.05, 1),
+                  labels = c("***", "**", "*", ""))
+    )
+
+  ggplot(heatmap_df, aes(x = Var1, y = Var2, fill = rho)) +
+    geom_tile(color = "white") +
+    geom_text(
+      aes(label = label, fontface = ifelse(p_adj < 0.05, "bold", "plain")),
+      size = 3.2,
+      parse = TRUE
+    ) +
+    scale_fill_gradient2(
+      low = "#6D9EC1", mid = "white", high = "#E46726",
+      midpoint = 0, limit = c(-1, 1),
+      name = "Spearman\nCorrelation"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(size = 8, face = "bold", angle = 45, vjust = 1, hjust = 1),
+      axis.text.y = element_text(size = 8, face = "bold"),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid = element_blank()
+    ) +
+    coord_fixed()
+}
+
+```
+
+DETOUR REACHING TASK
+```{r (NON LEARNERS) Solve Latency GLMM + dredge + estimated marginal means comparison}
+# 1. build simple model df with only necessary components to reduce data loss
+detour_model_df<- scoto_detour_morpho_df |> dplyr::select(fish_id, Sex.x, Treatment.x, MP_Binary, Tank_ID,Solve_Time) |> na.omit()
+
+# 2. Build solve_time model with predictors from previous model_df (all potential predictors of solve_time)
+Solve_Time_model<- glmmTMB( 
+  Solve_Time ~ Treatment.x * Sex.x + (1|Tank_ID),
+  data = detour_model_df,
+  family = Gamma(link = "log"), na.action = na.fail
+) 
+
+# 2.1 build null model for LRT comparison
+Solve_Time_null <- glmmTMB(
+  Solve_Time ~ 1 + (1 | Tank_ID),
+  data = detour_model_df,
+  family = Gamma(link = "log"),
+  na.action = na.fail
+)
+
+anova(Solve_Time_null, Solve_Time_model)
+
+
+# 3. Check model assumptions
+plot(simulateResiduals(Solve_Time_model)) 
+
+# 4. Look at summary of overall model
+summary(Solve_Time_model)
+
+
+# 3. use [dredge] to extract top AIC model (which predictors are most important to describing the trend of response)
+m1<- dredge(Solve_Time_model)
+
+(dredge_results<- m1)
+
+best_model <- get.models(dredge_results, 1)[[1]]
+summary(best_model) # best model includes treatment only?
+
+
+# 4. Use emmeans to compare means of each group to each other
+library(emmeans)
+emm <- emmeans(Solve_Time_model, ~ Treatment.x | Sex.x, type = "response")
+emm_males <- subset(emm, Sex.x == "M")
+emm_males
+
+pairs(emm_males, adjust = "holm")
+pairs(emm, adjust = "holm")
+
+plot(emm_males, comparisons = TRUE)
+
+emm <- emmeans(Solve_Time_model, ~ Sex.x | Treatment.x)
+pairs(emm)
+
+```
+
+```{r plot of solve_latency estimated marginal means}
+library(emmeans)
+
+emm <- emmeans(Solve_Time_model, ~ Treatment.x * Sex.x, type = "response")
+emm_df <- as.data.frame(emm)
+
+emm_df <- emm_df |>
+  dplyr::rename(
+    lower.CL = asymp.LCL,
+    upper.CL = asymp.UCL
+  )
+
+pd <- position_dodge(width = 0.75)
+
+ggplot(emm_df,
+       aes(x = Treatment.x,
+           y = response,
+           fill = Sex.x,
+           group = Sex.x)) +
+
+  geom_col(position = pd,
+           width = 0.7,
+           color = "black",
+           alpha = 0.8) +
+
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL),
+                position = pd,
+                width = 0.2,
+                linewidth = 0.8) +
+
+  labs(x = "",
+       y = "Estimated mean solve latency (s)",
+       fill = "Sex") +
+
+  scale_x_discrete(labels = c(
+    C = "Control",
+    L = "Low",
+    H = "High"
+  )) +
+
+  scale_fill_manual(values = c(
+    Female = "#E69F00",
+    Male   = "#56B4E9"
+  )) +
+
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "right",
+    panel.grid.major.x = element_blank()
+  )
+
+```
+
+```{r FIGURES raw data boxplot of solve_latency}
+
+
+# 1. boxplot of solve_latency by treatment and sex
+(solve_latency_plot <- ggplot(scoto_detour_morpho_df, aes(x = Treatment, y = Solve_Time, fill = Sex.x)) + 
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.75)) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), alpha = 0.6) +
+  theme_bw() +
+  labs(x = "", y = "Detour Solve Latency (s)", fill = "Sex") +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme(
+    axis.text.x = element_text(size = 11),
+    axis.title.y = element_text(size = 12, margin = margin(r = 10)), 
+    axis.text.y = element_text(size = 11)))
+
+solve_latency_plot
+# 3. scatterplot of solve latency by social latency
+scatterplot <- ggplot(
+  scoto_detour_morpho_df |> 
+    dplyr::filter(is.finite(Solve_Time), is.finite(Engages_with_barrier_sec_corrected)),
+  aes(x = Solve_Time, 
+      y = Engages_with_barrier_sec_corrected,
+      color = Sex.x)   # map Sex to color
+) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE) +   # separate line per Sex automatically
+  labs(x = "Solve Latency",
+       y = "Social Latency",
+       color = "Sex") +
+  scale_color_manual(values = sex_colors) +  # your custom palette
+  theme_minimal()
+
+
+# 3.1. correlation test of each sex solve_time with social latency
+cor.test(scoto_detour_morpho_df$Engages_with_barrier_sec_corrected, scoto_detour_morpho_df$Solve_Time, method = "spearman") # overall
+
+scoto_detour_morpho_df |> filter(Sex.x == "M") |> # males
+  with(cor.test(Engages_with_barrier_sec_corrected, Solve_Time))
+
+scoto_detour_morpho_df |> filter(Sex.x == "F") |> # females
+  with(cor.test(Engages_with_barrier_sec_corrected, Solve_Time))
+
+
+# 4. combine plots
+
+(combined_plot <- (solve_latency_plot) / (social_latency_plot) / (scatterplot))
+ggsave(plot = combined_plot, filename = "C:/Users/maxma/Downloads/combined_plot.jpeg", width = 5, height = 5, units = "in", dpi = 1000)
+
+library(patchwork)
+(combined_plot2 <- (solve_latency_plot) | (social_latency_plot))
+ggsave(plot = combined_plot2, filename = "C:/Users/maxma/Downloads/combined_plot2.jpeg", width = 10, height = 4, units = "in", dpi = 1000)
+
+ggsave(plot = solve_latency_plot, filename = "C:/Users/maxma/Downloads/solve_latency_plot.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+
+
+cp<- shyness_boxplot|exploration
+plot(cp)
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/combined_plot4.jpeg", width = 8, height = 5.5, units = "in", dpi = 1000)
+solve_latency_plot
+
+routelearn<- rl2/rl1
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/routelearn.jpeg", width = 7, height = 7, units = "in", dpi = 1000)
+rl1<- rl1 + theme(legend.position = "none")
+
+plot(routelearn)
+
+p1<- solve_latency_plot + theme(legend.position = "none")
+p2<- social_latency_plot
+p3<- shyness_boxplot + theme(legend.position = "none")
+p4<- exploration
+(combined_plot4 <- ((p1) | (p2))/ (p3|p4))
+```
+
+```{r Social Motivation GLMM + boxplot}
+kruskal.test(scoto_detour_morpho_df$Engages_with_barrier_sec_corrected, scoto_detour_morpho_df$Treatment.x)
+kruskal.test(scoto_detour_morpho_df$Engages_with_barrier_sec_corrected, scoto_detour_morpho_df$Sex.x)
+
+wilcox.test(Engages_with_barrier_sec_corrected ~ Sex.x, 
+            data = scoto_detour_morpho_df)
+
+hist(scoto_detour_morpho_df$Engages_with_barrier_sec_corrected)
+
+df<- scoto_detour_morpho_df |> dplyr::select(Engages_with_barrier_sec_corrected, Treatment.x, Sex.x, fish_id, Tank_ID) |> drop_na()
+
+
+  
+social_latency_model<- glmmTMB( 
+  Engages_with_barrier_sec_corrected ~ Treatment.x * Sex.x + (1|Tank_ID),
+  data = df,
+  family = Gamma(link = "log"), na.action = na.fail
+)
+
+simulateResiduals(social_latency_model, plot = T) # model passes all tests
+
+summary(social_latency_model)
+
+dredge_results<- MuMIn::dredge(social_latency_model)
+
+best_model <- get.models(dredge_results, 1)[[1]]
+summary(best_model)
+
+
+
+null_model <- glm(
+  Engages_with_barrier_sec_corrected ~ 1,
+  data = df,
+  family = Gamma(link = "log"),
+  na.action = na.fail
+)
+
+# 5. Model comparison using LRT (Likelihood Ratio Test)
+anova(null_model, best_model, test = "Chisq") # model is significantly better than null
+
+
+social_latency_plot <- ggplot(scoto_detour_morpho_df, aes(x = Treatment, y = Engages_with_barrier_sec_corrected, fill = Sex.x)) + 
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.75)) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), alpha = 0.6) +
+  theme_bw() +
+  labs(x = "", y = "Social Latency (s)", fill = "Sex") +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme(legend.position = "right", 
+        axis.text.y = element_text(size = 11), 
+        axis.text.x = element_text(size = 11), 
+        axis.title.y = element_text(size = 12, margin = margin(r = 10)))
+
+ggsave(plot = social_latency_plot, filename = "C:/Users/maxma/Downloads/social_latency_plot.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+
+social_latency_plot
+
+
+```
+
+```{r T-tests for sex-differences}
+
+
+# SOLVE LATENCY
+control_females<- scoto_detour_morpho_df |> filter(Treatment.x == "C" & Sex.x =="F")
+control_males<- scoto_detour_morpho_df |> filter(Treatment.x == "C"&  Sex.x =="M")
+
+t.test(control_females$Solve_Time, control_males$Solve_Time) # not significant
+
+control_females<- scoto_detour_morpho_learners_df |> filter(Treatment.x == "C" & Sex.x =="F")
+control_males<- scoto_detour_morpho_learners_df |> filter(Treatment.x == "C"&  Sex.x =="M")
+
+t.test(control_females$Solve_Time, control_males$Solve_Time) # not significant
+```
+
+
+```{r Fisher Exact test}
+# Fisher's exact test to compare proportion of non-solvers to solvers in control group
+df<- df |> filter(!is.na(LearnNonLearnBin))
+sum(df$LearnNonLearnBin)
+view(df)
+
+control_females<- df |> filter(Treatment.x == "C" & Sex.x =="F")
+control_males<- df |> filter(Treatment.x == "C"&  Sex.x =="M")
+
+tab <- table(df$Sex.x[df$Treatment.x == "C"],
+             df$LearnNonLearnBin[df$Treatment.x == "C"])
+tab
+
+fisher.test(tab, alternative = "greater") # groups are not significantly different in the proportion of nonsolvers
+
+
+
+
+```
+
+
+```{r (LEARNERS ONLY) Solve Latency GLMM + dredge + estimated marginal means comparison}
+# 1. build simple model df with only necessary components to reduce data loss
+detourlearn_model_df<- scoto_detour_morpho_learners_df |> dplyr::select(Fish_ID, Sex.x, Treatment.x, MP_Binary, Tank_ID,Solve_Time) |> na.omit()
+
+# 2. Build solve_time model with predictors from previous model_df (all potential predictors of solve_time)
+Solve_Time_learners_model<- glmmTMB( 
+  Solve_Time ~ Treatment.x * Sex.x + (1|Tank_ID),
+  data = detourlearn_model_df,
+  family = Gamma(link = "log"), na.action = na.fail
+) 
+
+
+# 2.1 build null model for LRT comparison
+Solve_Time_learners_null <- glmmTMB(
+  Solve_Time ~ 1 + (1 | Tank_ID),
+  data = detourlearn_model_df,
+  family = Gamma(link = "log"),
+  na.action = na.fail
+)
+
+anova(Solve_Time_learners_null, Solve_Time_learners_model)
+
+
+# 3. Check model assumptions
+plot(simulateResiduals(Solve_Time_learners_model)) 
+
+# 4. Look at summary of overall model
+summary(Solve_Time_learners_model)
+
+
+# 3. use [dredge] to extract top AIC model (which predictors are most important to describing the trend of response)
+m1<- dredge(Solve_Time_model)
+
+(dredge_results<- m1)
+
+best_model <- get.models(dredge_results, 1)[[1]]
+summary(best_model) # best model includes treatment only?
+
+
+# 4. Use emmeans to compare means of each group to each other
+library(emmeans)
+emm_learn <- emmeans(Solve_Time_learners_model, ~ Treatment.x | Sex.x, type = "response")
+emm_males_learn <- subset(emm_learn, Sex.x == "M")
+emm_males_learn
+
+pairs(emm_males, adjust = "holm")
+pairs(emm_learn, adjust = "holm")
+
+plot(emm_males, comparisons = TRUE)
+
+emm_learn_mf <- emmeans(Solve_Time_learners_model, ~ Sex.x | Treatment.x)
+pairs(emm_learn_mf)
+
+```
+SCOTOTAXIS ASSAY
+```{r beta Boldness GLMM + dredge + raw data boxplot}
+# 2 Analyses will be performed here. 1.) I will use a binomial GLMM to identify if there are any mean trait differences across treatment*sex groups and a dispersion model to test whther or not some groups differed in variance.
+# 2.) I will use an anova to briefly identify mean trait differences in distance moved
+
+# Lastly I will visualize the analyses as a boxplot
+
+# 1. Create model df with necessary components & remove NAs & 0s
+model_df<- scoto_detour_morpho_df |> dplyr::select(fish_id, Sex.x, Treatment.x, Cumulative_Duration_Total_Black, Tank_ID, Distance_moved_Total_cm) |> filter(Cumulative_Duration_Total_Black>0) |> na.omit()
+view(model_df)
+
+library(glmmTMB)
+
+# Step 2: Rescale response to (0,1)
+# shrink values slightly away from 0 and 1
+# scale large predictor variables
+epsilon <- 1e-6
+model_df$Cumulative_Duration_Total_Black_scaled <- 
+  (model_df$Cumulative_Duration_Total_Black / 600) * (1 - 2*epsilon) + epsilon
+model_df$Distance_moved_scaled <- scale(model_df$Distance_moved_Total_cm)
+
+
+# Quick check: range should now be strictly between 0 and 1
+range(model_df$Cumulative_Duration_Total_Black_scaled)
+
+# Step 3: Fit Beta GLMM with dispformula to allow for diff sex-treatment groups to have diff variances
+
+beta_mod2 <- glmmTMB(
+  Cumulative_Duration_Total_Black_scaled ~ Treatment.x * Sex.x  +(1 | Tank_ID),
+  dispformula = ~ Treatment.x * Sex.x,  # allows dispersion to vary by group
+  data = model_df,
+  family = beta_family(link = "logit"),
+  na.action=na.fail
+)
+
+# Step 3.1: Test model assumptions
+
+plot(simulateResiduals(beta_mod2))
+
+
+summary(beta_mod2) # males have significantly HIGHER variance than females
+
+# compare full to null model:
+null <- glmmTMB(
+  Cumulative_Duration_Total_Black_scaled ~ 1 + (1|Tank_ID),
+  dispformula = ~1,
+  data = model_df,
+  family = beta_family(link = "logit")
+)
+
+anova(null, beta_mod2)
+
+
+# Step 4: Dredge model 
+
+m1<- dredge(beta_mod2)
+ (dredge_results<- m1)
+# Step 5: acquire best model:
+best_model <- get.models(dredge_results, 1)[[1]]
+summary(best_model) # significant tank variance
+# males have HIGHER variance and HIGHER boldness than females
+# high treatment has HIGHER variance than control
+
+
+# 5. Create Boxplot
+shyness_boxplot<- ggplot(scoto_detour_morpho_df, aes(x = Treatment, y = Cumulative_Duration_Total_Black, fill = Sex.x)) + 
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.75)) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), alpha = 0.6) +
+  theme_bw() +
+  labs(x = "", y = "Time spent in Black Zone (s)", fill = "Sex") +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme(legend.position = "right", 
+        axis.text.x = element_text(size = 11), 
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 12, margin = margin(r = 10)))
+
+
+ggsave(plot = shyness_boxplot, filename = "C:/Users/maxma/Downloads/shyness_boxplot.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+
+```
+
+```{r test simpler model}
+
+beta_mod_simple <- glmmTMB(
+  Cumulative_Duration_Total_Black_scaled ~ Sex.x + Treatment.x +(1 | Tank_ID),
+  dispformula = ~ Sex.x*Treatment.x,  # allows dispersion to vary by group
+  data = model_df,
+  family = beta_family(link = "logit"),
+  na.action=na.fail
+)
+
+# Step 3.1: Test model assumptions
+
+plot(simulateResiduals(beta_mod_simple))
+summary(beta_mod_simple)
+
+```
+
+```{r gaussian Boldness GLMM + dredge + raw data boxplot}
+# 2 Analyses will be performed here. 1.) I will use a binomial GLMM to identify if there are any mean trait differences across treatment*sex groups and a dispersion model to test whther or not some groups differed in variance.
+# 2.) I will use an anova to briefly identify mean trait differences in distance moved
+
+# Lastly I will visualize the analyses as a boxplot
+
+# 1. Create model df with necessary components & remove NAs & 0s
+model_df<- scoto_detour_morpho_df |> dplyr::select(fish_id, Sex.x, Treatment.x, Cumulative_Duration_Total_Black, Tank_ID, Distance_moved_Total_cm) |> filter(Cumulative_Duration_Total_Black>0) |> na.omit()
+view(model_df)
+
+library(glmmTMB)
+
+
+# Quick check: range should now be strictly between 0 and 1
+range(model_df$Cumulative_Duration_Total_Black_scaled)
+
+# Step 3: Fit Beta GLMM with dispformula to allow for diff sex-treatment groups to have diff variances
+
+test_model <- glmmTMB(
+  Cumulative_Duration_Total_Black ~ Treatment.x * Sex.x  +(1 | Tank_ID),
+  dispformula = ~ Treatment.x * Sex.x,  # allows dispersion to vary by group
+  data = model_df,
+  na.action=na.fail
+)
+
+# Step 3.1: Test model assumptions
+
+plot(simulateResiduals(test_model))
+
+
+summary(test_model) # males have significantly HIGHER variance than females
+
+# compare full to null model:
+null <- glmmTMB(
+  Cumulative_Duration_Total_Black ~ 1 + (1|Tank_ID),
+  dispformula = ~1,
+  data = model_df
+)
+
+anova(null, test_model)
+
+null_mean <- glmmTMB(
+  Cumulative_Duration_Total_Black ~ 1 + (1 | Tank_ID),
+  dispformula = ~ 1,
+  data = model_df
+)
+
+mean_model <- glmmTMB(
+  Cumulative_Duration_Total_Black ~ Treatment.x * Sex.x + (1 | Tank_ID),
+  dispformula = ~ 1,
+  data = model_df
+)
+
+anova(null_mean, mean_model)
+
+
+disp_model <- glmmTMB(
+  Cumulative_Duration_Total_Black ~ Treatment.x * Sex.x + (1 | Tank_ID),
+  dispformula = ~ Treatment.x * Sex.x,
+  data = model_df
+)
+
+anova(mean_model, disp_model)
+
+
+```
+
+```{r Exploration GLMM}
+
+exploration<- ggplot(scoto_detour_morpho_df, aes(x = Treatment, y = Distance_moved_Total_cm, fill = Sex.x)) + 
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.75)) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), alpha = 0.6) +
+  theme_bw() +
+  labs(x = "", y = "Total Distance Moved (cm)", fill = "Sex") +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme(legend.position = "right", 
+        axis.text.x = element_text(size = 11), 
+        axis.text.y = element_text(size = 11), 
+        axis.title.y = element_text(size = 12, margin = margin(r = 10)))
+
+scoto_detour_morpho_df$Tank_ID[is.na(scoto_detour_morpho_df$Tank_ID)] <- "8L"
+
+df<- scoto_detour_morpho_df |> filter(!is.na(Distance_moved_Total_cm) & !is.na(Standard_Length))
+
+exploration_model<- glmmTMB(
+  Distance_moved_Total_cm ~ Treatment.x * Sex.x  +(1 | Tank_ID),
+  data = df,
+  na.action=na.fail
+)
+
+null <- glmmTMB(
+  Distance_moved_Total_cm ~ 1 + (1| Tank_ID),
+  data = df,
+  na.action=na.fail
+)
+
+anova(exploration_model, null)
+
+summary(model) # mixed model not necessary, tank ID unimportant
+
+simulateResiduals(model, plot = T) # passed all tests but the outlier test
+
+
+res <- simulateResiduals(model, n = 1000)  # n can be increased for stability
+residual_values <- residuals(res)  # these are scaled 0–1
+
+df_with_res <- df %>%
+  mutate(
+    residuals = residual_values
+  )
+
+# Find rows with very low (<0.025) or very high (>0.975) residuals
+outliers <- df_with_res %>%
+  filter(residuals < 0.025 | residuals > 0.975)
+
+view(outliers)
+
+
+model_full <- glmmTMB(
+  Distance_moved_Total_cm ~ Treatment.x * Sex.x *Standard_Length,
+  data = df,
+  family = gaussian(link = "identity"),
+  na.action = na.fail
+)
+
+
+summary(exploration_model)
+
+
+emm_sex <- emmeans(exploration_model, ~ Sex.x)
+pairs(emm_sex)
+
+
+
+
+ggplot(df, aes(x = Distance_moved_Total_cm, y = Standard_Length, color = Sex.x)) +
+  geom_point(aes(shape = Treatment.x), size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +  # separate line for each color (sex)
+  labs(
+    x = "Distance Moved (cm)",
+    y = "Standard Length",
+    color = "Sex",
+    shape = "Treatment"
+  ) +
+  theme_minimal() +
+  theme(text = element_text(size = 14))
+
+library(MuMIn)
+options(na.action = "na.fail")
+
+model_set <- dredge(model_full)
+(dredge_results<- model_set)
+
+best_model <- get.models(dredge_results, 1)[[1]]
+summary(best_model)
+
+simulateResiduals(model_full, plot = T) # passes all tests
+###################
+library(patchwork)
+p<- shyness/exploration
+plot(p)
+
+ggsave(plot = p, filename = "C:/Users/maxma/Downloads/p.jpeg", width = 10, height = 10, units = "in", dpi = 1000)
+
+exploration
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/exploration.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+```
+
+```{r distance moved corrected for standard length GLM}
+scoto_detour_morpho_df$dist_corrected<- scoto_detour_morpho_df$Distance_moved_Total_cm/df$Standard_Length
+
+hist(scoto_detour_morpho_df$dist_corrected)
+mod_df<- scoto_detour_morpho_df |> select(Fish_ID, Sex.x, Treatment.x, Tank_ID, dist_corrected) |> filter(dist_corrected >0) |> na.omit()
+  
+test<- glm(
+  dist_corrected ~ Sex.x*Treatment.x,
+  data = mod_df,
+  family = gaussian(link = "identity"),
+  na.action = na.fail
+)
+summary(test)
+
+plot(simulateResiduals(test))
+```
+
+
+ROUTE LEARNING ASSAY
+```{r Route Learning Slope & ANOVA T4}
+
+rl_df4$obs <- seq_len(nrow(rl_df4))
+
+mod4_olre <- glmmTMB(
+  cbind(total_errors, total_correct) ~ trial_num * treatment * sex +
+    (1 | tank_id) +
+    (1 | obs),
+  family = binomial,
+  data = rl_df4
+)
+
+
+
+# Model summary
+summary(mod4_bb)
+
+
+plot(simulateResiduals(mod4))
+
+# Estimated slopes (change in errors per trial) for each Treatment × Sex group
+em_slopes4 <- emtrends(mod4, ~ treatment * sex, var = "trial_num")
+print(em_slopes4)
+
+# Test if each group's slope differs from 0
+zero_tests4 <- test(em_slopes4)
+print(zero_tests4)
+
+# Pairwise comparisons of slopes between groups (with Holm correction)
+pairwise_comparisons4 <- pairs(em_slopes4, adjust = "holm")
+print(pairwise_comparisons4)
+
+# If you want a nice table of results
+slopes_summary4 <- summary(em_slopes4)
+print(slopes_summary4)
+
+
+plot(em_slopes4)
+
+# Extract slope estimates with CIs
+em_slopes_df4 <- as.data.frame(em_slopes4)
+
+ggplot(em_slopes_df4, aes(x = interaction(treatment, sex),
+                         y = trial_num.trend,
+                         color = treatment,
+                         shape = sex)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 3, position = position_dodge(width = 0.4)) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL),
+                width = 0.2, position = position_dodge(width = 0.4)) +
+  scale_color_manual(values= treatment_colors) +
+  theme_bw() +
+  labs(x = "",
+       y = "Slope of Proportion of Errors") +
+  theme(text = element_text(size = 14))
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/slopes_RL.jpeg", width = 5, height = 5, units = "in", dpi = 1000)
+
+
+cbind(rl_df4$total_errors, rl_df4$total_correct)
+
+```
+
+
+```{r interaction model learning slope GLMM}
+
+library(dplyr)
+library(MASS)
+library(broom)
+library(glmmTMB)
+
+# organize df by fish ID so all are in order, filter out all trials where error rate is NA or there are fewer than 2 trials
+rl_df4 %>%
+  group_by(fish_id) %>%
+  summarise(
+    n_trials = n(),
+    n_nonNA = sum(!is.na(trial_error_rate))
+  ) %>%
+  filter(n_nonNA < 2)
+
+
+# create df of slopes of trial error rate / trial numbers
+slopes_df <- rl_df4 %>%
+  group_by(fish_id) %>%
+  filter(sum(!is.na(trial_error_rate)) >= 2) %>%  # need ≥2 points
+  do({
+    fit <- lm(trial_error_rate ~ trial_num, data = .)
+    tidy_fit <- broom::tidy(fit)
+
+    data.frame(
+      slope      = tidy_fit$estimate[tidy_fit$term == "trial_num"],
+      slope_SE   = tidy_fit$std.error[tidy_fit$term == "trial_num"],
+      intercept  = tidy_fit$estimate[tidy_fit$term == "(Intercept)"],
+      sex        = unique(.$sex),
+      treatment  = unique(.$treatment),
+      tank_id    = unique(.$tank_id)
+    )
+  }) %>%
+  ungroup() %>%
+  distinct(fish_id, .keep_all = TRUE) # removes duplicates
+
+
+# create model of how treatment*sex predict slope
+slope_mod_var <- glmmTMB(
+  slope ~ treatment * sex + (1 | tank_id),
+  dispformula = ~ treatment * sex,   # allows different residual variances by group
+  family = gaussian(),
+  data = slopes_df
+)
+summary(slope_mod_var)
+
+
+library(DHARMa)
+
+sim <- simulateResiduals(slope_mod_var, n = 1000)
+plot(sim)
+
+```
+
+```{r group level inference on learning rates + visualization}
+
+library(emmeans)
+# get group level mean slopes from glmm
+emm_slopes <- emmeans(
+  slope_mod_var,
+  ~ treatment * sex
+)
+
+emm_slopes
+
+# test whether group slopes are different from 0 (already applies correction)
+learn_tests <- test(emm_slopes, null = 0)
+learn_tests
+
+# compare slopes between groups
+pairs(emm_slopes, adjust = "holm")
+
+
+emm_df <- as.data.frame(emm_slopes)
+
+ggplot(emm_df,
+       aes(x = treatment, y = emmean, color = sex)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(position = position_dodge(width = 0.4), size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL),
+                position = position_dodge(width = 0.4),
+                width = 0.2) +
+  theme_bw() +
+  labs(
+    y = "Mean learning rate\n(change in error rate per trial)",
+    x = ""
+  )
+
+```
+
+```{r reduced model of slope + test against 0 + visualization}
+
+# create model of how treatment*sex predict slope
+slope_mod_reduced <- glmmTMB(
+  slope ~ treatment + sex + (1 | tank_id),
+  dispformula = ~ treatment + sex,   # allows different residual variances by group
+  family = gaussian(),
+  data = slopes_df
+)
+summary(slope_mod_reduced)
+
+
+library(DHARMa)
+
+sim <- simulateResiduals(slope_mod_reduced, n = 1000)
+plot(sim)
+
+
+
+library(emmeans)
+library(dplyr)
+
+emm <- emmeans(slope_mod_reduced, ~ treatment * sex)  # rename to your model object
+emm_df <- as.data.frame(emm)
+
+# ensure factor order/labels
+emm_df$treatment <- factor(emm_df$treatment, levels = c("C","L","H"), labels = c("Control","Low","High"))
+
+emm_df$sex <- factor(emm_df$sex, levels = c("F","M"), labels = c("Female","Male"))
+
+
+# test against 0
+learn_tests <- test(emm, null = 0)
+learn_tests
+
+
+# plot in ggplot
+library(ggplot2)
+
+pd <- position_dodge(width = 0.5)
+
+sex_colors1 <- c(
+  "Male"   = "#7899d4",
+  "Female" = "#e3c16f"
+)
+
+rl1<- ggplot(emm_df, aes(x = treatment, y = emmean, color = sex, group = sex)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(position = pd, size = 3) +
+  geom_errorbar(
+    aes(ymin = lower.CL, ymax = upper.CL),
+    position = pd, width = 0.15, linewidth = 0.8
+  ) +
+  scale_color_manual(values = sex_colors1) +
+  theme_bw() +
+  labs(
+    x = "",
+    y = expression(Delta * P[e]),
+    color = "Sex"
+  ) +
+  theme(
+    axis.title.y = element_text(
+      margin = margin(r = 10), size = 12), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12))
+
+
+
+# save figure
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/route_learning_error_rate_plot.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+```
+
+```{r reduced model LRT x null}
+slope_mod_null <- glmmTMB(
+  slope ~ 1 + (1 | tank_id),
+  dispformula = ~ 1,
+  family = gaussian(),
+  data = slopes_df
+)
+
+anova(slope_mod_null, slope_mod_reduced)
+
+
+```
+
+```{r Route Learning Figure by trial number}
+library(dplyr)
+library(ggplot2)
+
+group_trial_summary <- rl_df4 |>
+  group_by(sex, treatment, trial_num) |>
+  summarise(
+    mean_error = mean(trial_error_rate, na.rm = TRUE),
+    se_error   = sd(trial_error_rate, na.rm = TRUE) / sqrt(sum(!is.na(trial_error_rate))),
+    n          = sum(!is.na(trial_error_rate)),
+    .groups    = "drop"
+  )
+
+
+sex_colors <- c(
+  "M" = "#7899d4",
+  "F" = "#e3c16f"
+)
+
+treatment_linetypes <- c(
+  "C" = "solid",
+  "L"     = "dashed",
+  "H"    = "dotted"
+)
+
+
+rl2<- ggplot(group_trial_summary,
+       aes(x = trial_num, y = mean_error,
+           color = sex,
+           linetype = treatment,
+           group = interaction(sex, treatment))) +
+  geom_line(linewidth = 1) +
+   geom_errorbar(
+    aes(
+      ymin = mean_error - se_error,
+      ymax = mean_error + se_error
+    ),
+    width = 0.15,
+    linewidth = 0.6
+  ) +
+  geom_point(size = 2) +
+  scale_color_manual(values = sex_colors) +
+  scale_linetype_manual(values = treatment_linetypes) +
+  labs(
+    x = "Trial",
+    y = expression(P[e]),
+    color = "Sex",
+    linetype = "Treatment"
+  ) +
+  theme_classic()+
+  theme(
+    axis.title.y = element_text(
+      margin = margin(r = 10), size = 12), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 12))
+
+
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/route_learning_error_rate_over_trials_SE.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+
+
+```
+
+```{r Participation Criterion}
+rl_df4<- rl_df|> filter(trial_num <= 4)
+rl_df4_only<- rl_df|> filter(trial_num == 4)
+rl_df5<- rl_df|> filter(trial_num == 5)
+rl_df3<- rl_df|> filter(trial_num == 3)
+rl_df2<- rl_df|> filter(trial_num == 2)
+rl_df1<- rl_df|> filter(trial_num == 1)
+
+library(dplyr)
+library(ggplot2)
+
+# Create a participation summary
+participation_df <- tibble(
+  trial = 1:5,
+  n_participants = c(
+    n_distinct(rl_df1$fish_id),
+    n_distinct(rl_df2$fish_id),
+    n_distinct(rl_df3$fish_id),
+    n_distinct(rl_df4_only$fish_id),
+    n_distinct(rl_df5$fish_id)
+  )
+)
+
+participation_df <- rl_df %>%
+  # keep only real solvers
+  filter(!is.na(solve_time), solve_time > 0) %>%
+  group_by(trial_num) %>%
+  summarise(
+    n_participants = n_distinct(fish_id),
+    .groups = "drop"
+  ) %>%
+  arrange(trial_num)
+
+ggplot(participation_df, aes(x = trial_num, y = n_participants)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = sort(unique(participation_df$trial_num))) +
+  labs(
+    x = "Trial number",
+    y = "Number of individuals completing the task",
+    title = "Participation across route-learning trials"
+  ) +
+  theme_classic()
+
+
+# participation as proportion
+participation_df <- participation_df %>%
+  mutate(proportion = n_participants / n_participants[trial_num == 1])
+
+ggplot(participation_df, aes(x = trial_num, y = proportion)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = sort(unique(participation_df$trial_num))) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Trial number",
+    y = "Proportion of individuals completing the task",
+    title = "Decline in participation across route-learning trials"
+  ) +
+  theme_classic()
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+participation_df <- rl_df %>%
+  filter(!is.na(solve_time), solve_time > 0) %>%
+  group_by(trial_num) %>%
+  summarise(n_participants = n_distinct(fish_id), .groups = "drop") %>%
+  arrange(trial_num)
+
+peak_n <- max(participation_df$n_participants, na.rm = TRUE)
+
+participation_df <- participation_df %>%
+  mutate(proportion = n_participants / peak_n)
+
+ggplot(participation_df, aes(x = trial_num, y = proportion)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = sort(unique(participation_df$trial_num))) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Trial number",
+    y = "Proportion of peak solvers",
+    title = "Participation across route-learning trials"
+  ) +
+  theme_classic()
+
+
+
+library(gt)
+participation_df
+
+table_gt <- participation_df %>%
+  gt()
+
+# Save as image
+gtsave(
+  data = table_gt,
+  filename = "participation_table.png"
+)
+
+
+
+```
+
+BEHAVIORAL SYNDROMES
+```{r Cognitive-Behavioral Correlations and Heatmaps}
+library(patchwork)
+
+
+prop_errors<- rl_df4 |> dplyr::select(trial_error_rate, fish_id, trial_num)
+
+
+prop_errors_mean <- prop_errors %>%
+  group_by(fish_id) %>%
+  summarise(
+    mean_error_rate = mean(trial_error_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+scoto_detour_morpho_df<- scoto_detour_morpho_df |> rename(fish_id =Fish_ID)
+scoto_with_mean <- scoto_detour_morpho_df %>%
+  left_join(prop_errors_mean, by = "fish_id")
+
+
+df<- scoto_with_mean |>  dplyr::select(fish_id, Sex.x, Treatment.x, Solve_Time, Engages_with_barrier_sec_corrected, Distance_moved_Total_cm, Cumulative_Duration_Total_Black, mean_error_rate) |> rename(Social_Latency= Engages_with_barrier_sec_corrected, Total_Distance = Distance_moved_Total_cm,  Time_in_black = Cumulative_Duration_Total_Black, Detour_Solve_Latency = Solve_Time, trial_error_rate = mean_error_rate)
+
+
+heatmap_df_C<- df |> filter(Treatment.x =="C")
+heatmap_df_L<- df |> filter(Treatment.x =="L")
+heatmap_df_H<- df |> filter(Treatment.x =="H")
+
+c<- heatmap_maker_spearman_fdr(heatmap_df_C)
+l<- heatmap_maker_spearman_fdr(heatmap_df_L)
+h<- heatmap_maker_spearman_fdr(heatmap_df_H)
+c
+l
+h
+
+heatmap_df_m_c<- df |> filter(Sex.x == "M" & Treatment.x == "C")
+heatmap_df_m_l<- df |> filter(Sex.x == "M" & Treatment.x == "L")
+heatmap_df_m_h<- df |> filter(Sex.x == "M" & Treatment.x == "H")
+heatmap_df_f_c<- df |> filter(Sex.x == "F" & Treatment.x == "C")
+heatmap_df_f_l<- df |> filter(Sex.x == "F" & Treatment.x == "L")
+heatmap_df_f_h<- df |> filter(Sex.x == "F" & Treatment.x == "H")
+
+pmc<- heatmap_maker_spearman_fdr(heatmap_df_m_c)
+pml<- heatmap_maker_spearman_fdr(heatmap_df_m_l)
+pmh<- heatmap_maker_spearman_fdr(heatmap_df_m_h)
+pfc<- heatmap_maker_spearman_fdr(heatmap_df_f_c)
+pfl<- heatmap_maker_spearman_fdr(heatmap_df_f_l)
+pfh<- heatmap_maker_spearman_fdr(heatmap_df_f_h)
+
+
+pmc
+pml
+pmh
+pfc
+pfl
+pfh
+
+ggsave(plot = pfh, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pfh.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+ggsave(plot = pfc, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pfc.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+ggsave(plot = pfl, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pfl.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+ggsave(plot = pmh, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pmh.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+ggsave(plot = pmc, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pmc.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+ggsave(plot = pml, filename = "C:/Users/maxma/Desktop/MP or Pollution Project/pml.jpeg", width = 6, height = 6, units = "in", dpi = 1000)
+
+
+result <- compare_all_correlations_by_treatment_sex(heatmap_df_L) # compares sexes within a single treatment 
+view(result)
+
+male<- df |> filter(Sex.x == "M")
+female<- df |> filter(Sex.x == "F")
+
+compare_all_variable_correlations_between_treatments(male)
+
+compare_all_variable_correlations_between_treatments(female)
+```
+
+```{r Fisher's z Correlation Comparisons}
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(rlang)
+
+pairwise_correlations_all_vars <- function(df) {
+  
+  # variables to test = all except group identifiers
+  vars <- setdiff(names(df), c("fish_id", "Sex.x", "Treatment.x"))
+  
+  # all pairs of variables
+  var_pairs <- combn(vars, 2, simplify = FALSE)
+  
+  # all unique groups
+  groups <- df %>%
+    distinct(Sex.x, Treatment.x)
+  
+  # all pairwise combinations of groups
+  group_pairs <- combn(1:nrow(groups), 2, simplify = FALSE)
+  
+  # run all tests
+  results <- map_dfr(
+    group_pairs,
+    ~ {
+      g1 <- groups[.x[1], ]
+      g2 <- groups[.x[2], ]
+      
+      map_dfr(
+        var_pairs,
+        function(vp) {
+          compare_correlations(
+            df,
+            sex1 = !!sym(as.character(g1$Sex.x)),
+            treatment1 = !!sym(as.character(g1$Treatment.x)),
+            sex2 = !!sym(as.character(g2$Sex.x)),
+            treatment2 = !!sym(as.character(g2$Treatment.x)),
+            var1 = !!sym(vp[1]),
+            var2 = !!sym(vp[2])
+          ) %>%
+            mutate(var1 = vp[1], var2 = vp[2])
+        }
+      )
+    }
+  )
+  
+  results
+}
+
+
+all_corrs <- pairwise_correlations_all_vars(df)
+
+print(all_corrs)
+view(all_corrs)
+
+sig_corrs <- all_corrs |> filter(p_value <0.05)
+view(sig_corrs) #none are significant after bonnferroni correction
+```
+
+
+```{r}
+scoto_detour_morpho_df|> filter(Sex.x == "M" & Treatment.x == "H") |> 
+  ggplot(aes(x= Cumulative_Duration_Total_Black, y= mean_errors_per_trial)) +
+  geom_point() + geom_smooth(method = "lm", se = T)
+  
+  
+  
+scatterplot <- ggplot(
+  scoto_detour_morpho_df |> aes(x = Solve_Time, 
+      y = Engages_with_barrier_sec_corrected,
+      color = Sex.x)   # map Sex to color
+) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE) +   # separate line per Sex automatically
+  labs(x = "Solve Latency",
+       y = "Social Latency",
+       color = "Sex") +
+  scale_color_manual(values = sex_colors) +  # your custom palette
+  theme_minimal()
+```
+
