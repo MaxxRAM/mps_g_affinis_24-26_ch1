@@ -1242,54 +1242,38 @@ ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/route_learning_e
 
 ```
 
-```{r Participation Criterion}
-rl_df4<- rl_df|> filter(trial_num <= 4)
-rl_df4_only<- rl_df|> filter(trial_num == 4)
-rl_df5<- rl_df|> filter(trial_num == 5)
-rl_df3<- rl_df|> filter(trial_num == 3)
-rl_df2<- rl_df|> filter(trial_num == 2)
-rl_df1<- rl_df|> filter(trial_num == 1)
+```{r Participation Criterion for Route Learning}
 
-library(dplyr)
-library(ggplot2)
-
-# Create a participation summary
-participation_df <- tibble(
-  trial = 1:5,
-  n_participants = c(
-    n_distinct(rl_df1$fish_id),
-    n_distinct(rl_df2$fish_id),
-    n_distinct(rl_df3$fish_id),
-    n_distinct(rl_df4_only$fish_id),
-    n_distinct(rl_df5$fish_id)
-  )
+# participation criterion: if they had any correct or wrong attempts at barrier 2, they are considered to have participated in the route learning assay
+rl_df$participated <- ifelse(
+  (rl_df$number_correct_barrier_2 > 0 | rl_df$number_wrong_barrier_2 > 0),
+  1, 0
 )
 
+rl_df$participated
+
+# calculate number of participants in each trial
 participation_df <- rl_df %>%
-  # keep only real solvers
-  filter(!is.na(solve_time), solve_time > 0) %>%
+  filter(!is.na(trial_num)) %>%
   group_by(trial_num) %>%
   summarise(
-    n_participants = n_distinct(fish_id),
-    .groups = "drop"
-  ) %>%
-  arrange(trial_num)
+    n_participants = n_distinct(fish_id[participated == 1]),
+    total_fish     = n_distinct(fish_id),
+    proportion     = n_participants / total_fish
+  )
 
+
+# visualize participation across trials by number of participants
 ggplot(participation_df, aes(x = trial_num, y = n_participants)) +
   geom_line(linewidth = 1) +
   geom_point(size = 3) +
   scale_x_continuous(breaks = sort(unique(participation_df$trial_num))) +
   labs(
     x = "Trial number",
-    y = "Number of individuals completing the task",
+    y = "Number of individuals entering the ",
     title = "Participation across route-learning trials"
   ) +
   theme_classic()
-
-
-# participation as proportion
-participation_df <- participation_df %>%
-  mutate(proportion = n_participants / n_participants[trial_num == 1])
 
 ggplot(participation_df, aes(x = trial_num, y = proportion)) +
   geom_line(linewidth = 1) +
@@ -1298,56 +1282,12 @@ ggplot(participation_df, aes(x = trial_num, y = proportion)) +
   scale_y_continuous(limits = c(0, 1)) +
   labs(
     x = "Trial number",
-    y = "Proportion of individuals completing the task",
-    title = "Decline in participation across route-learning trials"
-  ) +
-  theme_classic()
-
-```
-
-```{r}
-library(dplyr)
-library(ggplot2)
-
-participation_df <- rl_df %>%
-  filter(!is.na(solve_time), solve_time > 0) %>%
-  group_by(trial_num) %>%
-  summarise(n_participants = n_distinct(fish_id), .groups = "drop") %>%
-  arrange(trial_num)
-
-peak_n <- max(participation_df$n_participants, na.rm = TRUE)
-
-participation_df <- participation_df %>%
-  mutate(proportion = n_participants / peak_n)
-
-ggplot(participation_df, aes(x = trial_num, y = proportion)) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 3) +
-  scale_x_continuous(breaks = sort(unique(participation_df$trial_num))) +
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "Trial number",
-    y = "Proportion of peak solvers",
+    y = "Proportion of individuals participating",
     title = "Participation across route-learning trials"
   ) +
   theme_classic()
 
-
-
-library(gt)
-participation_df
-
-table_gt <- participation_df %>%
-  gt()
-
-# Save as image
-gtsave(
-  data = table_gt,
-  filename = "participation_table.png"
-)
-
-
-
+view(participation_df)
 ```
 
 BEHAVIORAL SYNDROMES
