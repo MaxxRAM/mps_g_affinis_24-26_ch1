@@ -5,7 +5,7 @@ date: "2025-08-22"
 output: html_document
 ---
 
-```{r Preliminary Set Up, include=FALSE}
+```{r load packages, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 # load in all necessary packages
@@ -20,7 +20,10 @@ library(lme4)
 library(lmerTest)
 library(emmeans)
 library(glmmTMB)
+```
 
+
+```{r adjust global plots, include=FALSE}
 # set correct colors for each sex
 
 sex_colors <- c(
@@ -40,7 +43,7 @@ scale_fill_discrete <- function(...) {
 
 ```{r scoto_detour_morpho dataframe set up}
 # load in data on boldness, exploration, social motivation, and inhibitory control
-f<- "C:/Users/maxma/Downloads/scoto_detour_morpho_df.csv"
+f<- "scoto_detour_morpho_df.csv"
 scoto_detour_morpho_df<- read.csv(f)
 
 # create df with individuals that solved the detour reaching task only and set all non-learners to 600 seconds
@@ -61,7 +64,7 @@ mdf<- scoto_detour_morpho_df |> filter(Sex.x == "M")
 
 ```{r route learning dataframe set up}
 # load in data on spatial learning
-f<- "C:/Users/maxma/Downloads/Route Learning Master Sheet_R - copy.csv"
+f<- "route_learning_df.csv"
 rl_df<- read_csv(f)
 
 # fix the time to reach transparent barriers to numeric
@@ -99,7 +102,7 @@ rl_df2<- rl_df|> filter(trial_num == 2)
 rl_df1<- rl_df|> filter(trial_num == 1)
 ```
 
-```{r custom functions for heatmap}
+```{r custom spearman or pearson heatmap}
 # Function for making heatmaps of all pairwise Spearman correlations within treatments & sexes; used to measure behavioral syndromes / profiles
 heatmap_maker_spearman <- function(df) {
   library(ggplot2)
@@ -218,7 +221,7 @@ compare_correlations <- function(df,
 
 ```
 
-```{r fdr heatmap}
+```{r custom fdr heatmap}
 heatmap_maker_spearman <- function(df) {
   library(ggplot2)
   library(dplyr)
