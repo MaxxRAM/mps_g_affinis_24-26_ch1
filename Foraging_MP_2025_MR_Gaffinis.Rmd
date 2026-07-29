@@ -1,0 +1,355 @@
+---
+title: "FORAGING BEHAVIOR"
+author: "Maxximus Ramsaroop"
+date: "2025-03-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(MASS)
+library(rstatix)
+```
+
+```{r, include=FALSE}
+f<- "C:/Users/maxma/Desktop/2nd paper MP/foraging_dataset_complete_5.27.2026.csv"
+foragingdf<- read_csv(f, col_names = T)
+
+
+foragingdf<- foragingdf |> rename(Total_video_duration = `Total length (s)`)
+
+foragingdf<- foragingdf |>  mutate(MPbinary = if_else(treatment == "control", 0, 1), Assay_duration_sec = Total_video_duration -start_timestamp)
+
+foragingdf<- foragingdf |> filter(start_binary == 1)
+
+foragingdf_feeders_only<- foragingdf |> filter(fish_forage_binary == 1)
+
+
+head(foragingdf)
+view(foragingdf)
+```
+
+Descriptive Statistics
+```{r mean, range, and histograms}
+
+# feeding metrics
+hist(foragingdf$latency_to_feed)
+hist(foragingdf$foraging_duration)
+
+summary(foragingdf$latency_to_feed)
+summary(foragingdf$foraging_duration)
+
+# aquatic surface respiration metrics
+hist(foragingdf$skimming_duration)
+
+summary(foragingdf$skimming_duration)
+
+```
+
+GLMs, ANOVAs
+
+```{r foraging duration  & probability of foraging analysis}
+
+
+# Question 1: Does the time spent foraging differ by sex and treatment?
+# GLMM used to test foraging_duration by sex*treatment with random effects for fish_ID and tank_ID
+
+library(glmmTMB)
+library(DHARMa)
+
+# model 1: does treatment or sex affect whether fish forage at all?
+foragingdf$foraged <- as.numeric(foragingdf$foraging_duration > 0)
+
+glmm_1 <- glmmTMB(
+  foraged ~ treatment * sex,
+  family = binomial,
+  data = foragingdf
+)
+
+glmm_simple <- glmmTMB(
+  foraged ~ treatment + sex,
+  family = binomial,
+  data = foragingdf
+)
+
+anova(glmm_1, glmm_simple)
+plot(simulateResiduals(glmm_simple))
+
+summary(glmm_simple)
+
+# model 2: does the time spent foraging differ by treatment and sex?
+glmm_2 <- glmmTMB(
+  foraging_duration ~ treatment * sex +
+    (1 | tank_id),
+  family = Gamma(link = "log"),
+  data = subset(foragingdf, foraging_duration > 0)
+)
+
+plot(simulateResiduals(glmm_2))
+summary(glmm_2)
+
+glmm_2simple <- glmmTMB(
+  foraging_duration ~ treatment + sex +
+    (1 | tank_id),
+  family = Gamma(link = "log"),
+  data = subset(foragingdf, foraging_duration > 0)
+)
+
+plot(simulateResiduals(glmm_2simple))
+summary(glmm_2simple)
+
+anova(glmm_2, glmm_2simple)
+
+```
+
+```{r latency to feed analysis}
+
+# GLM on feeders only
+ltf_model<- glmmTMB(data = foragingdf_feeders_only, latency_to_feed ~ treatment*sex, family = Gamma("log")) # mixed model unnecessary
+plot(simulateResiduals(ltf_model))
+
+summary(ltf_model)
+
+
+# Survival analysis (cox model) on latency to feed
+# because latency to feed is "right censored", skewed, and we could consider that individuals that did not feed, would have fed beyond the assay, a survival analysis could be better than a GLM.
+
+library(survival)
+
+foragingdf$time <- ifelse(
+  foragingdf$foraged == 1,
+  foragingdf$latency_to_feed,
+  foragingdf$Assay_duration_sec
+)
+
+foragingdf$event <- foragingdf$foraged
+
+
+cox_mod <- coxph(
+  Surv(time, event) ~ treatment * sex,
+  data = foragingdf
+)
+
+summary(cox_mod)
+
+cox.zph(cox_mod) # check assumptions of the cox model
+
+
+# visualization
+km_treat <- survfit(
+  Surv(time, event) ~ treatment,
+  data = foragingdf
+)
+
+plot(
+  km_treat,
+  fun = "event",
+  col = 1:3,
+  lwd = 2,
+  xlab = "Time (s)",
+  ylab = "Probability fed"
+)
+
+legend(
+  "bottomright",
+  legend = levels(foragingdf$treatment),
+  col = 1:3,
+  lwd = 2
+)
+```
+
+```{r skimming duration analysis}
+
+hist(foragingdf$skimming_duration)
+#GlM
+
+glm_skim_tw <- glmmTMB(
+  skimming_duration ~ treatment * sex +
+    (1 | tank_id),
+  family = tweedie(link = "log"),
+  data = foragingdf
+)
+
+plot(simulateResiduals(glm_skim))
+
+summary(glm_skim_tw)
+
+AIC(glm_skim_gamma, glm_skim_tw)
+
+simres<- simulateResiduals(glm_skim)
+testUniformity(simres)
+testDispersion(simres)
+testOutliers(simres)
+```
+```{r}
+skim_pos <- subset(foragingdf, skimming_duration > 0)
+
+skim_pos$log_skim <- log(skim_pos$skimming_duration)
+
+mod_lognorm <- glmmTMB(
+  log_skim ~ treatment * sex +
+    (1 | tank_id),
+  family = gaussian(),
+  data = skim_pos
+)
+
+plot(simulateResiduals(mod_lognorm))
+testUniformity(simulateResiduals(mod_lognorm))
+
+AIC(mod_lognorm, glm_skim_gamma)
+
+summary(mod_lognorm)
+
+mod_lognorm_add <- glmmTMB(
+  log_skim ~ treatment + sex + (1 | tank_id),
+  family = gaussian(),
+  data = skim_pos
+)
+
+summary(mod_lognorm_add)
+
+anova(mod_lognorm_add, mod_lognorm)
+```
+```{r}
+library(emmeans)
+
+emm_both <- emmeans(
+  mod_lognorm_add,
+  ~ treatment * sex,
+  type = "response"
+)
+
+emm_df <- as.data.frame(emm_both)
+
+
+library(ggplot2)
+
+ggplot(foragingdf,
+       aes(x = treatment,
+           y = skimming_duration)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.15, alpha = 0.6) +
+  facet_wrap(~ sex) +
+  labs(
+    x = "Treatment",
+    y = "Skimming duration (s)"
+  ) +
+  theme_classic()
+```
+
+
+```{r Visualization of latency to feed and skimming 10-14-2025 }
+foragingdf$treatment <- factor(foragingdf$treatment, levels = c("control", "low", "high"))
+
+sex_colors <- c(
+  "M" = "#7899d4",
+  "F" = "#e3c16f"
+)
+
+ggplot(foragingdf, aes(x = treatment, y = latency_to_feed)) + 
+  geom_boxplot(aes(fill = treatment), outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(aes(shape = sex), 
+              width = 0.2, alpha = 0.7, size = 2) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 12)
+  ) +
+  guides(fill = "none") +  # hides treatment color legend
+  labs(x = " ", y = "Latency to Feed (s)")
+
+# only feeders
+ggplot(foragingdf_feeders_only, aes(x = treatment, y = latency_to_feed)) + 
+  geom_boxplot(aes(fill = treatment), outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(aes(shape = sex), width = 0.2, alpha = 0.7, size = 2) +
+  theme_bw() +
+  guides(fill = "none") +  # hides treatment color legend
+  labs(x = " ", y = "Latency to Feed (s)")
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Desktop/MP or Pollution Project/latency to feed by treatment.png", width = 5, height = 5, units = "in", dpi = 1000)
+
+ggplot(foragingdf, aes(x = Treatment, y = `Skimming Total duration`)) + 
+  geom_boxplot(aes(fill = Treatment), outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(aes(shape = Sex), 
+              width = 0.2, alpha = 0.7, size = 2) +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 12)
+  ) +
+  guides(fill = "none") +  # hides treatment color legend
+  labs(x = " ", y = "Skimming Duration (s)")
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Desktop/MP or Pollution Project/skimming duration by treatment.png", width = 5, height = 5, units = "in", dpi = 1000)
+
+
+
+# Kruskal-Wallis for Skimming Total duration
+kruskal.test(foragingdf$`Skimming Total duration`, foragingdf$Treatment) # p = 0.02
+
+dunn_test(foragingdf,`Skimming Total duration` ~ Treatment)
+
+# Kruskal-Wallis for Latency to feed
+kruskal.test(foragingdf$`Latency to Feed (s)`, foragingdf$Treatment) # p = 0.07
+
+dunn_test(foragingdf,`Latency to Feed (s)` ~ Treatment)
+
+```
+
+```{r Latency to feed figure 2-17}
+foragingdf$Treatment <- factor(foragingdf$Treatment, levels = c("C", "L", "H"))
+
+sex_colors <- c(
+  "M" = "#7899d4",
+  "F" = "#e3c16f"
+)
+
+latency_to_feed<- ggplot( # n = 80 latency to feed figure
+  foragingdf,
+  aes(
+    x = treatment,
+    y = latency_to_feed,
+    fill = sex,
+    group = interaction(treatment, sex)
+  )
+) +
+  geom_boxplot(
+    position = position_dodge(width = 0.75),
+    outlier.shape = NA,
+    alpha = 0.9
+  ) +
+  geom_jitter(
+    position = position_jitterdodge(
+      jitter.width = 0.2,
+      dodge.width = 0.75
+    ),
+    alpha = 0.7,
+    size = 2
+  ) +
+  scale_fill_manual(values = sex_colors) +
+  scale_x_discrete(labels = c("C" = "Control", "L" = "Low", "H" = "High")) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(x = " ", y = "Latency to Feed (s)", fill = "Sex")
+
+ggsave(plot = latency_to_feed, filename = "C:/Users/maxma/Downloads/latency to feed.jpeg", width = 6, height = 4, units = "in", dpi = 1000)
+latency_to_feed
+
+```
+
+
+

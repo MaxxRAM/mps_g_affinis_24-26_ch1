@@ -1,0 +1,103 @@
+---
+title: "mp_retention_analysis_paper_1_2026"
+author: "Maxximus Ramsaroop"
+date: "2026-02-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(effsize)
+
+
+setwd("C:/Users/maxma/Desktop/MP or Pollution Project")
+
+df<- read.csv("morpho_data_2-9-2026_mp_mr.csv")
+
+df_ex<- df |> filter(treatment != "Control")
+```
+
+
+```{r Descriptive statistics}
+
+par(mfrow = c(2, 2)) # distributions of MP counts
+hist(df$mp_total, main = "MP total count")
+hist(df$mp_brain, main = "MP brain")
+hist(df$mp_gills, main = "MP Gills")
+hist(df$mp_guts , main = "MP Guts")
+hist(df$mp_gonads , main = "MP Gonads")
+par(mfrow = c(1, 1))  # reset
+
+# how many mps accumulate on average?
+df_ex$mp_total |> mean(na.rm = TRUE) # 0.8785 mp/individual
+sd(df_ex$mp_total, na.rm = TRUE) # 0.9782 mps
+
+# what proportion of individuals accumulated MPs
+nrow(df_ex)
+# insert code that counts the number of individuals with any MPs in df_ex
+# insert code that divides the number of individuals with MPs accumulated in df_ex / nrow(df_ex)
+
+
+
+
+# table of MP accumulation by treatment & sex
+df_ex %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_mp = mean(mp_total, na.rm = TRUE),
+    sd_mp   = sd(mp_total, na.rm = TRUE),
+    n       = sum(!is.na(mp_total)),
+    se_mp   = sd_mp / sqrt(n)
+  )
+
+```
+
+
+```{r sex differences in mp retention}
+boxplot(mp_total ~ sex, data = df_ex)
+f<- df_ex |> filter(sex == "Female")
+m<- df_ex |> filter(sex == "Male")
+
+# do females accumulate more mps than males?
+wilcox.test( # count data not continuous or distributed normally
+  mp_total ~ sex,
+  data = df_ex,
+  alternative = "greater", # hypothesized that females intake more than males
+  exact = FALSE
+)
+
+cliff.delta(mp_total ~ sex, data = df_ex)
+
+# Microplastic counts were higher in females than males (Wilcoxon rank-sum test, one-tailed, W = 1172, p = 0.017). The magnitude of this difference was small (Cliff’s δ = 0.221, 95% CI [0.0127, 0.411]), indicating substantial overlap between sexes.
+
+mean(f$mp_total > 0, na.rm = TRUE) # 0.666
+
+mean(m$mp_total > 0, na.rm = TRUE) # 0.482
+
+```
+
+```{r treatment differences in mp retention}
+
+boxplot(mp_total ~ treatment, data = df_ex)
+
+# do individuals under increased exposure accumulate more mps?
+wilcox.test( # count data not continuous or distributed normally
+  mp_total ~ treatment,
+  data = df_ex,
+  alternative = "greater", # hypothesized that higher dose == higher accumulation
+  exact = FALSE
+)
+```
+
+```{r sex x treatment differences in mp retention}
+
+```
+
+```{r organ differences accumulation}
+
+```
+
+
