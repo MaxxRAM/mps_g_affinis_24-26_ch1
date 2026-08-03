@@ -22,7 +22,6 @@ library(emmeans)
 library(glmmTMB)
 ```
 
-
 ```{r adjust global plots, include=FALSE}
 # set correct colors for each sex
 
