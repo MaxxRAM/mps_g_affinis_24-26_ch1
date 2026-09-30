@@ -546,27 +546,6 @@ t.test(control_females$Solve_Time, control_males$Solve_Time) # not significant
 ```
 
 
-```{r Fisher Exact test}
-# Fisher's exact test to compare proportion of non-solvers to solvers in control group
-df<- df |> filter(!is.na(LearnNonLearnBin))
-sum(df$LearnNonLearnBin)
-view(df)
-
-control_females<- df |> filter(Treatment.x == "C" & Sex.x =="F")
-control_males<- df |> filter(Treatment.x == "C"&  Sex.x =="M")
-
-tab <- table(df$Sex.x[df$Treatment.x == "C"],
-             df$LearnNonLearnBin[df$Treatment.x == "C"])
-tab
-
-fisher.test(tab, alternative = "greater") # groups are not significantly different in the proportion of nonsolvers
-
-
-
-
-```
-
-
 ```{r (LEARNERS ONLY) Solve Latency GLMM + dredge + estimated marginal means comparison}
 # 1. build simple model df with only necessary components to reduce data loss
 detourlearn_model_df<- scoto_detour_morpho_learners_df |> dplyr::select(Fish_ID, Sex.x, Treatment.x, MP_Binary, Tank_ID,Solve_Time) |> na.omit()
@@ -621,6 +600,8 @@ emm_learn_mf <- emmeans(Solve_Time_learners_model, ~ Sex.x | Treatment.x)
 pairs(emm_learn_mf)
 
 ```
+
+
 SCOTOTAXIS ASSAY
 ```{r beta Boldness GLMM + dredge + raw data boxplot}
 # 2 Analyses will be performed here. 1.) I will use a binomial GLMM to identify if there are any mean trait differences across treatment*sex groups and a dispersion model to test whther or not some groups differed in variance.

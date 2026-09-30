@@ -14,7 +14,7 @@ library(rstatix)
 ```
 
 ```{r, include=FALSE}
-f<- "C:/Users/maxma/Desktop/2nd paper MP/foraging_dataset_complete_5.27.2026.csv"
+f<- "foraging_dataset_complete_5.27.2026.csv"
 foragingdf<- read_csv(f, col_names = T)
 
 
