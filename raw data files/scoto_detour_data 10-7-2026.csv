@@ -64,10 +64,10 @@ fish_id,Sex.x,Tank_ID,Treatment.x,MP_Binary,Distance_moved_Total_cm,Cumulative_D
 2HF-Cod,F,2H,H,1,2439.64,306,43,600
 2HM-Banjo-Kazooie,M,2H,H,1,NA,,17,92
 2HM-Castlevania,M,2H,H,1,NA,,5,86
-2LF-Accordian,F,2L,L,1,2417.02,486.819,21,29
+2LM-Accordian,M,2L,L,1,2417.02,486.819,21,29
 2LF-Bassoon,F,2L,L,1,3198.48,287.958,11,285
 2LF-Clarinet,F,2L,L,1,1212.51,284.039,21,247
-2LM-Autoharp,M,2L,L,1,2173.61,471.213,54,124
+2LF-Autoharp,F,2L,L,1,2173.61,471.213,54,124
 2LM-Bass,M,2L,L,1,1850.67,428.375,37,600
 2LM-Cello,M,2L,L,1,2294.34,277.604,13,103
 3CF-Armin,F,3C,C,0,2703.67,329.347,90,58
@@ -156,7 +156,6 @@ fish_id,Sex.x,Tank_ID,Treatment.x,MP_Binary,Distance_moved_Total_cm,Cumulative_D
 8LF-Agatha,F,8L,L,1,1220.75,435.786,9,247
 8LF-Brimsley,F,8L,L,1,2669.01,420.299,16,211
 8LF-Charlotte,F,8L,L,1,2775.73,435.786,12,427
-8LM-Agatha,M,NA,L,1,1220.75,394.028,NA,NA
 8LM-Anthony,M,8L,L,1,2187.14,482.133,20,371
 8LM-Benedict,M,8L,L,1,1695.29,506.525,89,267
 8LM-Colin,M,8L,L,1,2870.96,459.737,5,5
