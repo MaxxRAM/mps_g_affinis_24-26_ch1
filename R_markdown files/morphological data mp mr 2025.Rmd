@@ -16,7 +16,7 @@ library(dplyr)
 
 
 ```{r read in and clean df, include=FALSE}
-f<- "C:/Users/maxma/Desktop/MP or Pollution Project/morpho_data_2-9-2026_mp_mr.csv"
+f<- "condition_weight_data 10-7-2026.csv"
 
 morpho_df<- read_csv(f)
 
