@@ -41,7 +41,7 @@ scale_fill_discrete <- function(...) {
 
 ```{r scoto_detour_morpho dataframe set up}
 # load in data on boldness, exploration, social motivation, and inhibitory control
-f<- "C:/Users/maxma/Downloads/scoto_detour_morpho_df.csv"
+f<- "scoto_detour_data 10-7-2026.csv"
 scoto_detour_morpho_df<- read.csv(f)
 
 # create df with individuals that solved the detour reaching task only and set all non-learners to 600 seconds
@@ -62,7 +62,7 @@ mdf<- scoto_detour_morpho_df |> filter(Sex.x == "M")
 
 ```{r route learning dataframe set up}
 # load in data on spatial learning
-f<- "C:/Users/maxma/Downloads/Route Learning Master Sheet_R - copy.csv"
+f<- "route_learning_data 10-7-2026.csv"
 rl_df<- read_csv(f)
 
 # fix the time to reach transparent barriers to numeric
