@@ -1,0 +1,222 @@
+---
+title: "Morphological_Data_MP_MR_2025"
+author: "Maxximus Ramsaroop"
+date: "2025-04-02"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rstatix)
+library(dplyr)
+```
+
+
+```{r read in and clean df, include=FALSE}
+f<- "C:/Users/maxma/Desktop/MP or Pollution Project/morpho_data_2-9-2026_mp_mr.csv"
+
+morpho_df<- read_csv(f)
+
+morpho_df <- morpho_df|> mutate(MPbinary = ifelse(treatment == "Control", 0, 1), fish_condition_factor = bw_wet/standard_length, gsi = (gonads_wet/bw_wet)*100)
+
+morpho_df$treatment <- factor(
+  morpho_df$treatment,
+  levels = c("Control", "Low", "High")
+)
+
+morpho_df$sex <- factor(
+  morpho_df$sex,
+  levels = c("Female", "Male")
+)
+
+view(morpho_df)
+```
+
+```{r questions and hypotheses}
+# Question: do individuals under exposure for 2 weeks exhibit reduced fish condition factor or weight? Is this reduction predicted by treatment or sex?
+
+# hypothesis: MP exposure should reduce fish condition factor or weight; higher treatments should have more pronounced effects, effects shoudl differ between the sexes
+```
+
+```{r descriptive statistics message=FALSE, warning=FALSE}
+
+morpho_df |> group_by(sex, treatment)|> summarise(n= n()) #number of individuals by treatment and sex
+
+for (col in names(morpho_df)) {
+  if (is.numeric(morpho_df[[col]])) {
+    hist(morpho_df[[col]], main = paste("Histogram of", col), xlab = col)
+  }
+} # creates histogram of all numeric data through a for loop
+
+
+```
+
+```{r Calculate length-weight condition}
+condition_df <- morpho_df %>%
+  filter(
+    !is.na(sex),
+    !is.na(bw_wet),
+    !is.na(standard_length),
+    !fish_id %in% c("9LM-Citrine", "1CF-Apple", "2LM-Accordian", "4CM-Andromeda", "10HM-Anise", "7LF-Akali", "4LF-Cantonese") # removed for impossible weights
+  )
+
+ggplot(condition_df, # plot length-weight relationship
+       aes(x = standard_length,
+           y = bw_wet,
+           color = sex)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Downloads/condition_by_sex.jpeg", width = 7, height = 5, units = "in", dpi = 1000)
+
+
+female_model <- lm( # create separate length-weight conditions for each sex
+  log(bw_wet) ~ log(standard_length),
+  data = subset(condition_df, sex == "Female")
+)
+
+summary(female_model)
+
+male_model <- lm(
+  log(bw_wet) ~ log(standard_length),
+  data = subset(condition_df, sex == "Male")
+)
+
+summary(male_model)
+
+
+# predict expected weight values
+condition_df$expected_weight <- NA
+
+female_rows <- condition_df$sex == "Female"
+
+condition_df$expected_weight[female_rows] <-
+  exp(
+    predict(
+      female_model,
+      newdata = condition_df[female_rows, ]
+    )
+  )
+
+male_rows <- condition_df$sex == "Male"
+
+condition_df$expected_weight[male_rows] <-
+  exp(
+    predict(
+      male_model,
+      newdata = condition_df[male_rows, ]
+    )
+  )
+
+# calculate Kn
+condition_df$Kn <-
+  condition_df$bw_wet /
+  condition_df$expected_weight
+
+hist(condition_df$Kn)
+
+summary(condition_df$Kn)
+```
+
+
+```{r gamma glmm & emmeans of Kn}
+# fit model to condition factor; gamma log linked
+mod_kn <- glmmTMB(
+  Kn ~ treatment * sex + (1 | tank_id),
+  family = Gamma(link = "log"),
+  data = condition_df
+)
+
+mod_null <- glmmTMB(
+  Kn ~ 1+ (1 | tank_id), 
+  family = Gamma(link = "log"),
+  data = condition_df
+)
+anova(mod_kn, mod_null)
+
+res_kn <- DHARMa::simulateResiduals(mod_kn)
+
+plot(res_kn) # passes all assumptions
+
+
+ggplot(condition_df, # plot of sex*treatment individuals along the Kn
+       aes(expected_weight, bw_wet,
+           color = treatment,
+           shape = sex)) +
+  geom_point(size = 3) +
+  geom_abline(slope = 1, intercept = 0)
+
+car::Anova( # hypothesis test model with anova to identify group level effects
+  mod_kn,
+  type = "III"
+) # no significant effect of any predictors or their interactions
+
+library(emmeans)
+
+emm_kn <- emmeans(
+  mod_kn,
+  ~ treatment * sex,
+  type = "response"
+)
+
+emm_kn
+
+```
+
+```{r plot Kn by treatment & sex}
+library(ggplot2)
+
+emm_df <- as.data.frame(emm_kn)
+
+sex_colors <- c(
+  "Male" = "#7899d4",
+  "Female" = "#e3c16f"
+)
+
+ggplot(
+  condition_df,
+  aes(x = treatment, y = Kn, fill = sex)
+) +
+
+  geom_boxplot(
+  position = position_dodge(width = 0.7),
+  width = 0.7,
+  alpha = 1
+    )+
+
+  geom_jitter(
+    aes(group = sex),
+    position = position_jitterdodge(
+      jitter.width = 0.12,
+      dodge.width = 0.7
+    ),
+    color = "black",
+    alpha = 0.5,
+    size = 1.8
+  ) +
+
+  scale_fill_manual(
+  values = sex_colors,
+  labels = c("Male" = "M", "Female" = "F")
+) +
+
+  labs(
+    x = NULL,
+    y = "Relative condition factor (Kn)",
+    fill = "Sex"
+  ) +
+  theme_bw()+
+  theme(
+    axis.text.x = element_text(size = 11),
+    axis.title.y = element_text(size = 12, margin = margin(r = 10)), 
+    axis.text.y = element_text(size = 11))
+
+```
+
+```{r save fig to pc}
+ggsave(plot = last_plot(), filename = "C:/Users/maxma/Desktop/LocalGitRFiles/relative_condition_plot.jpeg", width = 5, height = 2.5, units = "in", dpi = 1000)
+```
+
